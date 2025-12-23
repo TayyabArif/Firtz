@@ -9,6 +9,8 @@
     "dev:port": "powershell -ExecutionPolicy Bypass -File scripts/dev-start.ps1 -Port 3001",
     "health": "powershell -ExecutionPolicy Bypass -File scripts/health-check.ps1",
     "build": "next build",
+    "build:webpack": "next build --webpack",
+    "build:turbo": "next build --turbopack",
     "start": "next start",
     "lint": "next lint"
   },
