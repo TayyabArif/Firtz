@@ -28,14 +28,26 @@ function Page(): React.ReactElement {
       let errorMessage = 'An error occurred during sign up. Please try again.';
       
       const firebaseError = signUpError as any;
-      if ( firebaseError.code === 'auth/email-already-in-use' ) {
+      
+      // Check for CONFIGURATION_NOT_FOUND error (Email/Password auth not enabled)
+      if ( firebaseError.code === 'auth/configuration-not-found' || 
+           (firebaseError.message && firebaseError.message.includes('CONFIGURATION_NOT_FOUND')) ||
+           (firebaseError.error && firebaseError.error.message === 'CONFIGURATION_NOT_FOUND') ) {
+        errorMessage = 'Email/Password authentication is not enabled in Firebase. Please enable it in Firebase Console > Authentication > Sign-in method > Email/Password.';
+      } else if ( firebaseError.code === 'auth/email-already-in-use' ) {
         errorMessage = 'This email is already registered. Please use a different email or try signing in.';
       } else if ( firebaseError.code === 'auth/weak-password' ) {
-        errorMessage = 'Password is too weak. Please choose a stronger password.';
+        errorMessage = 'Password is too weak. Please choose a stronger password (at least 6 characters).';
       } else if ( firebaseError.code === 'auth/invalid-email' ) {
         errorMessage = 'Please enter a valid email address.';
       } else if ( firebaseError.code === 'auth/operation-not-allowed' ) {
-        errorMessage = 'Email/password accounts are not enabled. Please contact support.';
+        errorMessage = 'Email/password accounts are not enabled. Please enable Email/Password in Firebase Console.';
+      } else if ( firebaseError.code === 'auth/invalid-api-key' ) {
+        errorMessage = 'Invalid Firebase API key. Please check your .env.local configuration.';
+      } else {
+        // Log the full error for debugging
+        console.error('Full signup error:', firebaseError);
+        errorMessage = firebaseError.message || `Sign up failed: ${firebaseError.code || 'Unknown error'}`;
       }
       
       setError( errorMessage );
