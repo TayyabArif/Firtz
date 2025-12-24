@@ -176,14 +176,36 @@ export async function getDetailedQueryResults(
   limitCount: number = 100
 ): Promise<{ results: DetailedQueryResult[]; error?: any }> {
   try {
-    const q = query(
+    let q = query(
       collection(db, 'v8detailed_query_results'),
       where('brandId', '==', brandId),
       orderBy('date', 'desc'),
       limit(limitCount)
     );
     
-    const querySnapshot = await getDocs(q);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (orderByError: any) {
+      console.warn('⚠️ Could not order by date (index may be missing), fetching without orderBy:', orderByError.message);
+      q = query(
+        collection(db, 'v8detailed_query_results'),
+        where('brandId', '==', brandId),
+        limit(limitCount)
+      );
+      querySnapshot = await getDocs(q);
+      
+      // Manually sort by date
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aDate = new Date(a.data().date || 0).getTime();
+          const bDate = new Date(b.data().date || 0).getTime();
+          return bDate - aDate; // Descending order
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
+    
     const results = querySnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
@@ -202,13 +224,34 @@ export async function getDetailedQueryResultsBySession(
   processingSessionId: string
 ): Promise<{ results: DetailedQueryResult[]; error?: any }> {
   try {
-    const q = query(
+    let q = query(
       collection(db, 'v8detailed_query_results'),
       where('processingSessionId', '==', processingSessionId),
       orderBy('date', 'desc')
     );
     
-    const querySnapshot = await getDocs(q);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (orderByError: any) {
+      console.warn('⚠️ Could not order by date (index may be missing), fetching without orderBy:', orderByError.message);
+      q = query(
+        collection(db, 'v8detailed_query_results'),
+        where('processingSessionId', '==', processingSessionId)
+      );
+      querySnapshot = await getDocs(q);
+      
+      // Manually sort by date
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aDate = new Date(a.data().date || 0).getTime();
+          const bDate = new Date(b.data().date || 0).getTime();
+          return bDate - aDate; // Descending order
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
+    
     const results = querySnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()

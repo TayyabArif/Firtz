@@ -6,7 +6,77 @@ export class GeminiProvider extends BaseAPIProvider {
 
   constructor(config: ProviderConfig) {
     super('google-gemini', 'ai', config);
+    // Default to v1beta, but will try v1 if v1beta fails
     this.baseUrl = config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
+  }
+  
+  /**
+   * Try different API versions to find one that works
+   */
+  private async tryApiVersions(model: string, request: GeminiRequest): Promise<any> {
+    const apiVersions = [
+      { version: 'v1beta', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' },
+      { version: 'v1', baseUrl: 'https://generativelanguage.googleapis.com/v1' },
+    ];
+    
+    // Also try different model name formats
+    const modelVariants = [
+      model,
+      model.replace('gemini-', ''),
+      `models/${model}`,
+    ];
+    
+    for (const apiVersion of apiVersions) {
+      for (const modelVariant of modelVariants) {
+        try {
+          const cleanModel = modelVariant.replace('models/', '');
+          const url = `${apiVersion.baseUrl}/models/${cleanModel}:generateContent?key=${this.config.apiKey}`;
+          
+          console.log(`🔄 Trying Gemini API: ${apiVersion.version} with model: ${cleanModel}`);
+          
+          const response = await this.makeRequest(url, {
+            method: 'POST',
+            body: JSON.stringify({
+              contents: request.contents,
+              generationConfig: request.generationConfig,
+            }),
+          });
+          
+          // Update baseUrl to the working version
+          this.baseUrl = apiVersion.baseUrl;
+          console.log(`✅ Found working API version: ${apiVersion.version} with model: ${cleanModel}`);
+          return response;
+        } catch (error) {
+          // Continue to next combination
+          continue;
+        }
+      }
+    }
+    
+    throw new Error('Could not find a working API version and model combination');
+  }
+
+  /**
+   * List available models for the API key
+   */
+  private async listAvailableModels(): Promise<string[]> {
+    try {
+      const listUrl = `${this.baseUrl}/models?key=${this.config.apiKey}`;
+      const response = await this.makeRequest(listUrl, {
+        method: 'GET',
+      });
+      
+      const models = response.models
+        ?.filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
+        ?.map((m: any) => m.name?.replace('models/', '') || m.name)
+        || [];
+      
+      console.log(`📋 Available Gemini models:`, models);
+      return models;
+    } catch (error) {
+      console.warn('⚠️ Could not list available models:', (error as Error).message);
+      return [];
+    }
   }
 
   async execute(request: GeminiRequest & { model?: string }): Promise<APIResponse> {
@@ -24,24 +94,65 @@ export class GeminiProvider extends BaseAPIProvider {
 
       await this.checkRateLimit();
 
-      const model = request.model || 'gemini-2.0-flash-thinking-exp';
-      const url = `${this.baseUrl}/models/${model}:generateContent?key=${this.config.apiKey}`;
+      // First, try to get available models
+      let modelCandidates: string[] = [];
       
-      console.log(`🚀 Gemini API Request:`, {
-        url: url.replace(this.config.apiKey, '[API_KEY]'),
-        model,
-        contentsLength: request.contents?.length
-      });
+      if (request.model) {
+        modelCandidates = [request.model];
+      } else {
+        // Try to list available models first
+        const availableModels = await this.listAvailableModels();
+        
+        if (availableModels.length > 0) {
+          // Use available models, prioritizing flash and pro models
+          const preferred = availableModels.filter(m => 
+            m.includes('flash') || m.includes('pro')
+          );
+          modelCandidates = preferred.length > 0 
+            ? [...preferred, ...availableModels.filter(m => !preferred.includes(m))]
+            : availableModels;
+          console.log(`📋 Using available models:`, modelCandidates);
+        } else {
+          // Fallback to common model names if listing fails
+          modelCandidates = [
+            'gemini-pro',                // Most common and stable
+            'gemini-1.5-flash',         // Fast model
+            'gemini-1.5-pro',           // More capable
+          ];
+          console.log(`⚠️ Could not list models, using fallback:`, modelCandidates);
+        }
+      }
       
-      const rawResponse = await this.retryRequest(async () => {
-        return await this.makeRequest(url, {
-          method: 'POST',
-          body: JSON.stringify({
-            contents: request.contents,
-            generationConfig: request.generationConfig,
-          }),
-        });
-      });
+      let lastError: Error | null = null;
+      let rawResponse: any = null;
+      
+      // Try each model with different API versions
+      for (const model of modelCandidates) {
+        try {
+          console.log(`🚀 Trying Gemini model: ${model}`);
+          
+          rawResponse = await this.retryRequest(async () => {
+            return await this.tryApiVersions(model, request);
+          });
+          
+          // Success! Break out of loop
+          console.log(`✅ Gemini model ${model} succeeded`);
+          break;
+        } catch (error) {
+          lastError = error as Error;
+          const errorMsg = (error as Error).message;
+          console.warn(`⚠️ Gemini model ${model} failed, trying next...`, errorMsg);
+          
+          // If this is the last model, throw the error
+          if (model === modelCandidates[modelCandidates.length - 1]) {
+            throw lastError;
+          }
+        }
+      }
+      
+      if (!rawResponse) {
+        throw lastError || new Error('All Gemini models failed');
+      }
 
       console.log(`✅ Gemini API Response received:`, {
         hasCandidates: !!rawResponse.candidates,

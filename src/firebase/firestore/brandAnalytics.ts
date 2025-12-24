@@ -1134,14 +1134,35 @@ export async function saveLifetimeAnalytics(analyticsData: LifetimeBrandAnalytic
 // Get latest brand analytics for a specific brand
 export async function getLatestBrandAnalytics(brandId: string): Promise<{ result?: BrandAnalyticsData; error?: any }> {
   try {
-    const q = query(
+    let q = query(
       collection(db, 'v8_user_brand_analytics'),
       where('brandId', '==', brandId),
       orderBy('processingSessionTimestamp', 'desc'),
       limit(1)
     );
     
-    const querySnapshot = await getDocs(q);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (orderByError: any) {
+      console.warn('⚠️ Could not order by processingSessionTimestamp (index may be missing), fetching without orderBy:', orderByError.message);
+      q = query(
+        collection(db, 'v8_user_brand_analytics'),
+        where('brandId', '==', brandId),
+        limit(1)
+      );
+      querySnapshot = await getDocs(q);
+      
+      // Manually sort by processingSessionTimestamp
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aTime = new Date(a.data().processingSessionTimestamp || 0).getTime();
+          const bTime = new Date(b.data().processingSessionTimestamp || 0).getTime();
+          return bTime - aTime; // Descending order
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
     
     if (querySnapshot.empty) {
       return { result: undefined };
@@ -1160,14 +1181,35 @@ export async function getLatestBrandAnalytics(brandId: string): Promise<{ result
 // Get brand analytics history with trend analysis
 export async function getBrandAnalyticsHistory(brandId: string): Promise<{ result?: BrandAnalyticsHistory; error?: any }> {
   try {
-    const q = query(
+    let q = query(
       collection(db, 'v8_user_brand_analytics'),
       where('brandId', '==', brandId),
       orderBy('processingSessionTimestamp', 'desc'),
       limit(2) // Get latest and previous for trend calculation
     );
     
-    const querySnapshot = await getDocs(q);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (orderByError: any) {
+      console.warn('⚠️ Could not order by processingSessionTimestamp (index may be missing), fetching without orderBy:', orderByError.message);
+      q = query(
+        collection(db, 'v8_user_brand_analytics'),
+        where('brandId', '==', brandId),
+        limit(2)
+      );
+      querySnapshot = await getDocs(q);
+      
+      // Manually sort by processingSessionTimestamp
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aTime = new Date(a.data().processingSessionTimestamp || 0).getTime();
+          const bTime = new Date(b.data().processingSessionTimestamp || 0).getTime();
+          return bTime - aTime; // Descending order
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
     
     if (querySnapshot.empty) {
       return { result: undefined };
@@ -1215,13 +1257,33 @@ export async function getBrandAnalyticsHistory(brandId: string): Promise<{ resul
 // Get all analytics for a user across all brands
 export async function getUserBrandAnalytics(userId: string): Promise<{ result?: BrandAnalyticsData[]; error?: any }> {
   try {
-    const q = query(
+    let q = query(
       collection(db, 'v8_user_brand_analytics'),
       where('userId', '==', userId),
       orderBy('processingSessionTimestamp', 'desc')
     );
     
-    const querySnapshot = await getDocs(q);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (orderByError: any) {
+      console.warn('⚠️ Could not order by processingSessionTimestamp (index may be missing), fetching without orderBy:', orderByError.message);
+      q = query(
+        collection(db, 'v8_user_brand_analytics'),
+        where('userId', '==', userId)
+      );
+      querySnapshot = await getDocs(q);
+      
+      // Manually sort by processingSessionTimestamp
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aTime = new Date(a.data().processingSessionTimestamp || 0).getTime();
+          const bTime = new Date(b.data().processingSessionTimestamp || 0).getTime();
+          return bTime - aTime; // Descending order
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
     
     const analytics: BrandAnalyticsData[] = [];
     querySnapshot.forEach((doc) => {

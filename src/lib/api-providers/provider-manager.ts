@@ -55,17 +55,24 @@ export class ProviderManager {
     // In production, this would come from environment variables or database
     const configs = [];
     
-    // Azure OpenAI Configuration
-    const azureConfig = {
-      name: 'azure-openai',
-      type: 'azure-openai' as const,
-      apiKey: process.env.AZURE_OPENAI_API_KEY || 'your_azure_openai_api_key_here',
-      azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT || 'https://your-resource-name.openai.azure.com',
-      deploymentName: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
-      timeout: 30000,
-      retryAttempts: 3,
-    };
-    configs.push(azureConfig);
+    // Azure OpenAI Configuration (only if API key is provided)
+    const azureApiKey = process.env.AZURE_OPENAI_API_KEY;
+    if (azureApiKey && azureApiKey.trim() !== '' && azureApiKey !== 'your_azure_openai_api_key_here') {
+      const azureConfig = {
+        name: 'azure-openai',
+        type: 'azure-openai' as const,
+        apiKey: azureApiKey,
+        azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT || 'https://your-resource-name.openai.azure.com',
+        deploymentName: process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4',
+        apiVersion: process.env.AZURE_OPENAI_API_VERSION || '2024-02-01',
+        timeout: 30000,
+        retryAttempts: 3,
+      };
+      configs.push(azureConfig);
+      console.log('✅ Azure OpenAI provider configured');
+    } else {
+      console.warn('⚠️ Azure OpenAI API key not found. Set AZURE_OPENAI_API_KEY environment variable to enable Azure OpenAI provider.');
+    }
 
     // Azure OpenAI Direct Configuration (Azure Search integration DISABLED)
     const azureSearchApiKey = process.env.AZURE_OPENAI_SEARCH_API_KEY || process.env.AZURE_OPENAI_API_KEY;

@@ -13,34 +13,9 @@ import { CompetitorAnalyticsData } from '@/utils/competitor-analytics';
 // Get the Firestore instance
 const db = getFirestore(firebase_app);
 
-// Interface for competitor analytics data structure
-export interface CompetitorAnalyticsData {
-  userId: string;
-  brandId: string;
-  brandName: string;
-  processingSessionId: string;
-  timestamp: string;
-  competitors: CompetitorMetrics[];
-  totals: {
-    totalQueriesProcessed: number;
-    totalCompetitorMentions: number;
-    totalCompetitorCitations: number;
-    uniqueCompetitorsMentioned: number;
-    competitorVisibilityScore: number;
-  };
-  providerStats: {
-    chatgpt: CompetitorProviderStats;
-    google: CompetitorProviderStats;
-    perplexity: CompetitorProviderStats;
-  };
-  insights: {
-    topCompetitor: string;
-    mostVisibleCompetitors: string[];
-    competitorRankings: CompetitorRanking[];
-    averageCompetitorMentionsPerQuery: number;
-    marketShareAnalysis: { [competitorName: string]: number };
-  };
-}
+// Note: CompetitorAnalyticsData is imported from '@/utils/competitor-analytics'
+// The following interfaces are used by the legacy calculateCompetitorAnalytics function
+// but the main data structure comes from utils/competitor-analytics.ts
 
 export interface CompetitorMetrics {
   name: string;
@@ -314,21 +289,54 @@ export async function getCompetitorAnalyticsByBrand(brandId: string) {
   let result = null;
 
   try {
-    const analyticsQuery = query(
+    // Try ordering by createdAt first (most reliable)
+    let analyticsQuery = query(
       collection(db, 'v8competitoranalytics'),
       where('brandId', '==', brandId),
-      orderBy('processingSessionTimestamp', 'desc'),
+      orderBy('createdAt', 'desc'),
       firestoreLimit(10)
     );
 
-    const querySnapshot = await getDocs(analyticsQuery);
-    const analytics: CompetitorAnalyticsData[] = [];
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(analyticsQuery);
+    } catch (orderByError: any) {
+      // If createdAt orderBy fails (index missing), try without orderBy
+      console.warn('⚠️ Could not order by createdAt, trying without orderBy:', orderByError.message);
+      analyticsQuery = query(
+        collection(db, 'v8competitoranalytics'),
+        where('brandId', '==', brandId),
+        firestoreLimit(10)
+      );
+      querySnapshot = await getDocs(analyticsQuery);
+      
+      // Manually sort by createdAt if available
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aData = a.data();
+          const bData = b.data();
+          const aTime = aData.createdAt?.toMillis?.() || aData.processingSessionTimestamp || 0;
+          const bTime = bData.createdAt?.toMillis?.() || bData.processingSessionTimestamp || 0;
+          return bTime - aTime;
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
+
+    const analytics: any[] = [];
 
     querySnapshot.forEach((doc) => {
+      const data = doc.data();
       analytics.push({
         id: doc.id,
-        ...doc.data()
-      } as CompetitorAnalyticsData);
+        ...data,
+        // Ensure competitorStats exists
+        competitorStats: data.competitorStats || {},
+        processingSessionTimestamp: data.processingSessionTimestamp || data.timestamp || new Date().toISOString(),
+        totalQueriesProcessed: data.totalQueriesProcessed || 0,
+        totalCompetitorMentions: data.totalCompetitorMentions || 0,
+        uniqueCompetitorsDetected: data.uniqueCompetitorsDetected || Object.keys(data.competitorStats || {}).length
+      });
     });
 
     console.log('✅ Retrieved competitor analytics:', {
@@ -354,27 +362,68 @@ export async function getLatestCompetitorAnalytics(brandId: string) {
   let result = null;
 
   try {
-    const analyticsQuery = query(
+    // Try ordering by createdAt first (most reliable)
+    let analyticsQuery = query(
       collection(db, 'v8competitoranalytics'),
       where('brandId', '==', brandId),
-      orderBy('processingSessionTimestamp', 'desc'),
+      orderBy('createdAt', 'desc'),
       firestoreLimit(1)
     );
 
-    const querySnapshot = await getDocs(analyticsQuery);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(analyticsQuery);
+    } catch (orderByError: any) {
+      // If createdAt orderBy fails (index missing), try without orderBy
+      console.warn('⚠️ Could not order by createdAt, trying without orderBy:', orderByError.message);
+      analyticsQuery = query(
+        collection(db, 'v8competitoranalytics'),
+        where('brandId', '==', brandId),
+        firestoreLimit(1)
+      );
+      querySnapshot = await getDocs(analyticsQuery);
+      
+      // Manually sort by createdAt if available, or by processingSessionTimestamp
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aData = a.data();
+          const bData = b.data();
+          const aTime = aData.createdAt?.toMillis?.() || aData.processingSessionTimestamp || 0;
+          const bTime = bData.createdAt?.toMillis?.() || bData.processingSessionTimestamp || 0;
+          return bTime - aTime;
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
     
     if (!querySnapshot.empty) {
       const doc = querySnapshot.docs[0];
+      const data = doc.data();
+      
+      // Transform the data to match the expected structure from utils/competitor-analytics.ts
+      // The saved data should already have competitorStats, but ensure it's in the right format
       result = {
         id: doc.id,
-        ...doc.data()
-      } as CompetitorAnalyticsData;
+        ...data,
+        // Ensure competitorStats exists (it should from calculateCumulativeCompetitorAnalytics)
+        competitorStats: data.competitorStats || {},
+        // Ensure processingSessionTimestamp exists
+        processingSessionTimestamp: data.processingSessionTimestamp || data.timestamp || new Date().toISOString(),
+        // Ensure totalQueriesProcessed exists
+        totalQueriesProcessed: data.totalQueriesProcessed || 0,
+        // Ensure totalCompetitorMentions exists
+        totalCompetitorMentions: data.totalCompetitorMentions || 0,
+        // Ensure uniqueCompetitorsDetected exists
+        uniqueCompetitorsDetected: data.uniqueCompetitorsDetected || Object.keys(data.competitorStats || {}).length
+      };
 
       console.log('✅ Retrieved latest competitor analytics:', {
         brandId,
         sessionId: result.processingSessionId,
         totalCompetitorMentions: result.totalCompetitorMentions,
-        uniqueCompetitorsDetected: result.uniqueCompetitorsDetected
+        uniqueCompetitorsDetected: result.uniqueCompetitorsDetected,
+        hasCompetitorStats: !!result.competitorStats,
+        competitorCount: Object.keys(result.competitorStats || {}).length
       });
     } else {
       console.log('⚠️ No competitor analytics found for brand:', brandId);
@@ -466,14 +515,40 @@ export async function getCompetitorTrends(brandId: string, limitCount: number = 
   let result = null;
 
   try {
-    const analyticsQuery = query(
+    // Try ordering by createdAt first (most reliable)
+    let analyticsQuery = query(
       collection(db, 'v8competitoranalytics'),
       where('brandId', '==', brandId),
-      orderBy('processingSessionTimestamp', 'desc'),
+      orderBy('createdAt', 'desc'),
       firestoreLimit(limitCount)
     );
 
-    const querySnapshot = await getDocs(analyticsQuery);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(analyticsQuery);
+    } catch (orderByError: any) {
+      // If createdAt orderBy fails (index missing), try without orderBy
+      console.warn('⚠️ Could not order by createdAt, trying without orderBy:', orderByError.message);
+      analyticsQuery = query(
+        collection(db, 'v8competitoranalytics'),
+        where('brandId', '==', brandId),
+        firestoreLimit(limitCount)
+      );
+      querySnapshot = await getDocs(analyticsQuery);
+      
+      // Manually sort by createdAt if available
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aData = a.data();
+          const bData = b.data();
+          const aTime = aData.createdAt?.toMillis?.() || aData.processingSessionTimestamp || 0;
+          const bTime = bData.createdAt?.toMillis?.() || bData.processingSessionTimestamp || 0;
+          return bTime - aTime;
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
+
     const trends: Array<{
       sessionId: string;
       timestamp: string;
@@ -484,14 +559,14 @@ export async function getCompetitorTrends(brandId: string, limitCount: number = 
     }> = [];
 
     querySnapshot.forEach((doc) => {
-      const data = doc.data() as CompetitorAnalyticsData;
+      const data = doc.data() as any;
       trends.push({
-        sessionId: data.processingSessionId,
-        timestamp: data.processingSessionTimestamp,
-        totalMentions: data.totalCompetitorMentions,
-        visibilityScore: data.competitorVisibilityScore,
-        uniqueCompetitors: data.uniqueCompetitorsDetected,
-        topCompetitor: data.insights.topCompetitor
+        sessionId: data.processingSessionId || '',
+        timestamp: data.processingSessionTimestamp || data.timestamp || new Date().toISOString(),
+        totalMentions: data.totalCompetitorMentions || 0,
+        visibilityScore: data.competitorVisibilityScore || 0,
+        uniqueCompetitors: data.uniqueCompetitorsDetected || 0,
+        topCompetitor: data.insights?.topCompetitor || 'none'
       });
     });
 

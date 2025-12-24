@@ -200,6 +200,8 @@ export async function getUserRecommendations(userId: string, brandId?: string): 
 
   try {
     let q;
+    let querySnapshot;
+    
     if (brandId) {
       // Fetch brand-specific recommendations
       q = query(
@@ -209,17 +211,60 @@ export async function getUserRecommendations(userId: string, brandId?: string): 
         orderBy('priority', 'desc'),
         limit(5)
       );
+      
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (orderByError: any) {
+        console.warn('⚠️ Could not order by priority (index may be missing), fetching without orderBy:', orderByError.message);
+        q = query(
+          collection(db, 'user_recommendations'),
+          where('userId', '==', userId),
+          where('brandId', '==', brandId),
+          limit(5)
+        );
+        querySnapshot = await getDocs(q);
+        
+        // Manually sort by priority
+        if (!querySnapshot.empty) {
+          const docs = querySnapshot.docs.sort((a, b) => {
+            const aPriority = a.data().priority === 'high' ? 3 : a.data().priority === 'medium' ? 2 : 1;
+            const bPriority = b.data().priority === 'high' ? 3 : b.data().priority === 'medium' ? 2 : 1;
+            return bPriority - aPriority; // Descending order
+          });
+          querySnapshot = { ...querySnapshot, docs } as any;
+        }
+      }
     } else {
       // Fetch general user recommendations
       q = query(
-      collection(db, 'user_recommendations'),
-      where('userId', '==', userId),
-      orderBy('priority', 'desc'),
-      limit(5)
-    );
+        collection(db, 'user_recommendations'),
+        where('userId', '==', userId),
+        orderBy('priority', 'desc'),
+        limit(5)
+      );
+      
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (orderByError: any) {
+        console.warn('⚠️ Could not order by priority (index may be missing), fetching without orderBy:', orderByError.message);
+        q = query(
+          collection(db, 'user_recommendations'),
+          where('userId', '==', userId),
+          limit(5)
+        );
+        querySnapshot = await getDocs(q);
+        
+        // Manually sort by priority
+        if (!querySnapshot.empty) {
+          const docs = querySnapshot.docs.sort((a, b) => {
+            const aPriority = a.data().priority === 'high' ? 3 : a.data().priority === 'medium' ? 2 : 1;
+            const bPriority = b.data().priority === 'high' ? 3 : b.data().priority === 'medium' ? 2 : 1;
+            return bPriority - aPriority; // Descending order
+          });
+          querySnapshot = { ...querySnapshot, docs } as any;
+        }
+      }
     }
-    
-    const querySnapshot = await getDocs(q);
     
     result = querySnapshot.docs.map(doc => ({
       id: doc.id,
@@ -239,6 +284,8 @@ export async function getUserTopDomains(userId: string, brandId?: string): Promi
 
   try {
     let q;
+    let querySnapshot;
+    
     if (brandId) {
       // Fetch brand-specific top domains
       q = query(
@@ -248,17 +295,56 @@ export async function getUserTopDomains(userId: string, brandId?: string): Promi
         orderBy('mentions', 'desc'),
         limit(8)
       );
+      
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (orderByError: any) {
+        console.warn('⚠️ Could not order by mentions (index may be missing), fetching without orderBy:', orderByError.message);
+        q = query(
+          collection(db, 'user_top_domains'),
+          where('userId', '==', userId),
+          where('brandId', '==', brandId),
+          limit(8)
+        );
+        querySnapshot = await getDocs(q);
+        
+        // Manually sort by mentions
+        if (!querySnapshot.empty) {
+          const docs = querySnapshot.docs.sort((a, b) => {
+            return (b.data().mentions || 0) - (a.data().mentions || 0); // Descending order
+          });
+          querySnapshot = { ...querySnapshot, docs } as any;
+        }
+      }
     } else {
       // Fetch user-level top domains
       q = query(
-      collection(db, 'user_top_domains'),
-      where('userId', '==', userId),
-      orderBy('mentions', 'desc'),
-      limit(8)
-    );
+        collection(db, 'user_top_domains'),
+        where('userId', '==', userId),
+        orderBy('mentions', 'desc'),
+        limit(8)
+      );
+      
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (orderByError: any) {
+        console.warn('⚠️ Could not order by mentions (index may be missing), fetching without orderBy:', orderByError.message);
+        q = query(
+          collection(db, 'user_top_domains'),
+          where('userId', '==', userId),
+          limit(8)
+        );
+        querySnapshot = await getDocs(q);
+        
+        // Manually sort by mentions
+        if (!querySnapshot.empty) {
+          const docs = querySnapshot.docs.sort((a, b) => {
+            return (b.data().mentions || 0) - (a.data().mentions || 0); // Descending order
+          });
+          querySnapshot = { ...querySnapshot, docs } as any;
+        }
+      }
     }
-    
-    const querySnapshot = await getDocs(q);
     
     result = querySnapshot.docs.map((doc, index) => ({
       rank: index + 1,
@@ -281,6 +367,8 @@ export async function getUserTrendData(userId: string, brandId?: string, days: n
 
   try {
     let q;
+    let querySnapshot;
+    
     if (brandId) {
       // Fetch brand-specific trend data
       q = query(
@@ -290,17 +378,60 @@ export async function getUserTrendData(userId: string, brandId?: string, days: n
         orderBy('date', 'desc'),
         limit(days)
       );
+      
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (orderByError: any) {
+        console.warn('⚠️ Could not order by date (index may be missing), fetching without orderBy:', orderByError.message);
+        q = query(
+          collection(db, 'user_trends'),
+          where('userId', '==', userId),
+          where('brandId', '==', brandId),
+          limit(days)
+        );
+        querySnapshot = await getDocs(q);
+        
+        // Manually sort by date
+        if (!querySnapshot.empty) {
+          const docs = querySnapshot.docs.sort((a, b) => {
+            const aDate = new Date(a.data().date || 0).getTime();
+            const bDate = new Date(b.data().date || 0).getTime();
+            return bDate - aDate; // Descending order
+          });
+          querySnapshot = { ...querySnapshot, docs } as any;
+        }
+      }
     } else {
       // Fetch user-level trend data
       q = query(
-      collection(db, 'user_trends'),
-      where('userId', '==', userId),
-      orderBy('date', 'desc'),
-      limit(days)
-    );
+        collection(db, 'user_trends'),
+        where('userId', '==', userId),
+        orderBy('date', 'desc'),
+        limit(days)
+      );
+      
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (orderByError: any) {
+        console.warn('⚠️ Could not order by date (index may be missing), fetching without orderBy:', orderByError.message);
+        q = query(
+          collection(db, 'user_trends'),
+          where('userId', '==', userId),
+          limit(days)
+        );
+        querySnapshot = await getDocs(q);
+        
+        // Manually sort by date
+        if (!querySnapshot.empty) {
+          const docs = querySnapshot.docs.sort((a, b) => {
+            const aDate = new Date(a.data().date || 0).getTime();
+            const bDate = new Date(b.data().date || 0).getTime();
+            return bDate - aDate; // Descending order
+          });
+          querySnapshot = { ...querySnapshot, docs } as any;
+        }
+      }
     }
-    
-    const querySnapshot = await getDocs(q);
     
     result = querySnapshot.docs.map(doc => ({
       date: doc.data().date,
@@ -322,6 +453,8 @@ export async function getBrandPromptsData(userId: string, brandId?: string): Pro
 
   try {
     let q;
+    let querySnapshot;
+    
     if (brandId) {
       // Fetch brand-specific prompts analysis
       q = query(
@@ -331,17 +464,56 @@ export async function getBrandPromptsData(userId: string, brandId?: string): Pro
         orderBy('mentions', 'desc'),
         limit(6)
       );
+      
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (orderByError: any) {
+        console.warn('⚠️ Could not order by mentions (index may be missing), fetching without orderBy:', orderByError.message);
+        q = query(
+          collection(db, 'user_brand_prompts'),
+          where('userId', '==', userId),
+          where('brandId', '==', brandId),
+          limit(6)
+        );
+        querySnapshot = await getDocs(q);
+        
+        // Manually sort by mentions
+        if (!querySnapshot.empty) {
+          const docs = querySnapshot.docs.sort((a, b) => {
+            return (b.data().mentions || 0) - (a.data().mentions || 0); // Descending order
+          });
+          querySnapshot = { ...querySnapshot, docs } as any;
+        }
+      }
     } else {
       // Fetch user-level prompts analysis
       q = query(
-      collection(db, 'user_brand_prompts'),
-      where('userId', '==', userId),
-      orderBy('mentions', 'desc'),
-      limit(6)
-    );
+        collection(db, 'user_brand_prompts'),
+        where('userId', '==', userId),
+        orderBy('mentions', 'desc'),
+        limit(6)
+      );
+      
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (orderByError: any) {
+        console.warn('⚠️ Could not order by mentions (index may be missing), fetching without orderBy:', orderByError.message);
+        q = query(
+          collection(db, 'user_brand_prompts'),
+          where('userId', '==', userId),
+          limit(6)
+        );
+        querySnapshot = await getDocs(q);
+        
+        // Manually sort by mentions
+        if (!querySnapshot.empty) {
+          const docs = querySnapshot.docs.sort((a, b) => {
+            return (b.data().mentions || 0) - (a.data().mentions || 0); // Descending order
+          });
+          querySnapshot = { ...querySnapshot, docs } as any;
+        }
+      }
     }
-    
-    const querySnapshot = await getDocs(q);
     
     result = querySnapshot.docs.map((doc, index) => ({
       rank: index + 1,

@@ -89,13 +89,38 @@ export async function updateQueryResponses(
 // Get all queries for a specific brand
 export async function getQueriesByBrand(brandId: string): Promise<{ result?: UserQueryDocument[]; error?: any }> {
   try {
-    const q = query(
+    // Try ordering by createdAt first (requires composite index)
+    let q = query(
       collection(db, COLLECTION_NAME),
       where('brandId', '==', brandId),
       orderBy('createdAt', 'desc')
     );
     
-    const querySnapshot = await getDocs(q);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (orderByError: any) {
+      // If orderBy fails (index missing), try without orderBy and sort manually
+      console.warn('⚠️ Could not order by createdAt (index may be missing), fetching without orderBy:', orderByError.message);
+      q = query(
+        collection(db, COLLECTION_NAME),
+        where('brandId', '==', brandId)
+      );
+      querySnapshot = await getDocs(q);
+      
+      // Manually sort by createdAt if available
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aData = a.data();
+          const bData = b.data();
+          const aTime = aData.createdAt?.toMillis?.() || aData.createdAt?.seconds || 0;
+          const bTime = bData.createdAt?.toMillis?.() || bData.createdAt?.seconds || 0;
+          return bTime - aTime; // Descending order
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
+    
     const queries: UserQueryDocument[] = [];
     
     querySnapshot.forEach((doc) => {
@@ -105,6 +130,7 @@ export async function getQueriesByBrand(brandId: string): Promise<{ result?: Use
       } as UserQueryDocument);
     });
 
+    console.log(`✅ Fetched ${queries.length} queries for brand: ${brandId}`);
     return { result: queries };
   } catch (error) {
     console.error('❌ Error fetching queries by brand:', error);
@@ -115,13 +141,38 @@ export async function getQueriesByBrand(brandId: string): Promise<{ result?: Use
 // Get all queries for a specific user
 export async function getQueriesByUser(userId: string): Promise<{ result?: UserQueryDocument[]; error?: any }> {
   try {
-    const q = query(
+    // Try ordering by createdAt first (requires composite index)
+    let q = query(
       collection(db, COLLECTION_NAME),
       where('userId', '==', userId),
       orderBy('createdAt', 'desc')
     );
     
-    const querySnapshot = await getDocs(q);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (orderByError: any) {
+      // If orderBy fails (index missing), try without orderBy and sort manually
+      console.warn('⚠️ Could not order by createdAt (index may be missing), fetching without orderBy:', orderByError.message);
+      q = query(
+        collection(db, COLLECTION_NAME),
+        where('userId', '==', userId)
+      );
+      querySnapshot = await getDocs(q);
+      
+      // Manually sort by createdAt if available
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aData = a.data();
+          const bData = b.data();
+          const aTime = aData.createdAt?.toMillis?.() || aData.createdAt?.seconds || 0;
+          const bTime = bData.createdAt?.toMillis?.() || bData.createdAt?.seconds || 0;
+          return bTime - aTime; // Descending order
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
+    
     const queries: UserQueryDocument[] = [];
     
     querySnapshot.forEach((doc) => {
@@ -131,6 +182,7 @@ export async function getQueriesByUser(userId: string): Promise<{ result?: UserQ
       } as UserQueryDocument);
     });
 
+    console.log(`✅ Fetched ${queries.length} queries for user: ${userId}`);
     return { result: queries };
   } catch (error) {
     console.error('❌ Error fetching queries by user:', error);
@@ -163,13 +215,38 @@ export async function getUserQuery(queryId: string): Promise<{ result?: UserQuer
 // Get unprocessed queries
 export async function getUnprocessedQueries(): Promise<{ result?: UserQueryDocument[]; error?: any }> {
   try {
-    const q = query(
+    // Try ordering by createdAt first (requires composite index)
+    let q = query(
       collection(db, COLLECTION_NAME),
       where('status', 'in', ['pending', 'processing']),
       orderBy('createdAt', 'asc')
     );
     
-    const querySnapshot = await getDocs(q);
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (orderByError: any) {
+      // If orderBy fails (index missing), try without orderBy and sort manually
+      console.warn('⚠️ Could not order by createdAt (index may be missing), fetching without orderBy:', orderByError.message);
+      q = query(
+        collection(db, COLLECTION_NAME),
+        where('status', 'in', ['pending', 'processing'])
+      );
+      querySnapshot = await getDocs(q);
+      
+      // Manually sort by createdAt if available
+      if (!querySnapshot.empty) {
+        const docs = querySnapshot.docs.sort((a, b) => {
+          const aData = a.data();
+          const bData = b.data();
+          const aTime = aData.createdAt?.toMillis?.() || aData.createdAt?.seconds || 0;
+          const bTime = bData.createdAt?.toMillis?.() || bData.createdAt?.seconds || 0;
+          return aTime - bTime; // Ascending order
+        });
+        querySnapshot = { ...querySnapshot, docs } as any;
+      }
+    }
+    
     const queries: UserQueryDocument[] = [];
     
     querySnapshot.forEach((doc) => {
@@ -179,6 +256,7 @@ export async function getUnprocessedQueries(): Promise<{ result?: UserQueryDocum
       } as UserQueryDocument);
     });
 
+    console.log(`✅ Fetched ${queries.length} unprocessed queries`);
     return { result: queries };
   } catch (error) {
     console.error('❌ Error fetching unprocessed queries:', error);

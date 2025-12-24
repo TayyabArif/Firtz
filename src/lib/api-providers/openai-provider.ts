@@ -29,13 +29,23 @@ export class AzureOpenAIProvider extends BaseAPIProvider {
 
       await this.checkRateLimit();
 
-      const url = `${this.azureEndpoint}/openai/deployments/${this.deploymentName}/chat/completions?api-version=${this.apiVersion}`;
+      // Ensure endpoint doesn't have trailing slash
+      const cleanEndpoint = this.azureEndpoint.replace(/\/$/, '');
+      const url = `${cleanEndpoint}/openai/deployments/${this.deploymentName}/chat/completions?api-version=${this.apiVersion}`;
+      
+      console.log(`🚀 Azure OpenAI Request:`, {
+        url: url.replace(this.config.apiKey || '', '[API_KEY]'),
+        deployment: this.deploymentName,
+        apiVersion: this.apiVersion,
+        hasApiKey: !!this.config.apiKey && this.config.apiKey.trim() !== ''
+      });
       
       const rawResponse = await this.retryRequest(async () => {
         return await this.makeRequest(url, {
           method: 'POST',
           headers: {
             'api-key': this.config.apiKey,
+            'Content-Type': 'application/json',
           },
           body: JSON.stringify(request),
         });
@@ -70,22 +80,36 @@ export class AzureOpenAIProvider extends BaseAPIProvider {
 
     } catch (error) {
       const responseTime = Date.now() - startTime;
+      const errorMessage = (error as Error).message;
       
-      // Console log OpenAI errors
-      console.error('❌ OpenAI Request Error:', {
+      // Enhanced error logging
+      console.error('❌ Azure OpenAI Request Error:', {
         requestId,
-        error: (error as Error).message,
-        stack: (error as Error).stack,
+        error: errorMessage,
+        errorType: error instanceof Error ? error.constructor.name : typeof error,
         responseTime,
-        url: `${this.azureEndpoint}/openai/deployments/${this.deploymentName}/chat/completions`,
-        request: JSON.stringify(request, null, 2)
+        endpoint: this.azureEndpoint,
+        deployment: this.deploymentName,
+        apiVersion: this.apiVersion,
+        hasApiKey: !!this.config.apiKey && this.config.apiKey.trim() !== '',
+        apiKeyLength: this.config.apiKey?.length || 0,
       });
+      
+      // Provide more helpful error message
+      let userFriendlyError = errorMessage;
+      if (errorMessage.includes('fetch failed') || errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ENOTFOUND')) {
+        userFriendlyError = `Network error: Unable to connect to Azure OpenAI endpoint. Please check your AZURE_OPENAI_ENDPOINT configuration.`;
+      } else if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+        userFriendlyError = `Authentication failed: Invalid API key. Please check your AZURE_OPENAI_API_KEY.`;
+      } else if (errorMessage.includes('404') || errorMessage.includes('Not Found')) {
+        userFriendlyError = `Deployment not found: ${this.deploymentName}. Please check your AZURE_OPENAI_DEPLOYMENT configuration.`;
+      }
       
       return {
         providerId: this.name,
         requestId,
         status: 'error',
-        error: (error as Error).message,
+        error: userFriendlyError,
         responseTime,
         cost: 0,
         timestamp: new Date(),
