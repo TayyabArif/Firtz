@@ -1,9 +1,7 @@
 import firebase_app from "../config";
 import { getFirestore, collection, doc, setDoc, getDoc, serverTimestamp, query, where, getDocs, orderBy, limit } from "firebase/firestore";
-import { analyzeBrandMentions } from '@/components/features/BrandMentionCounter';
-import { extractChatGPTCitations } from '@/components/features/ChatGPTResponseRenderer';
-import { extractGoogleAIOverviewCitations } from '@/components/features/GoogleAIOverviewRenderer';
-import { extractPerplexityCitations } from '@/components/features/PerplexityResponseRenderer';
+import { analyzeBrandMentions } from '@/utils/brandMentionAnalyzer';
+import { extractChatGPTCitations, extractGoogleAIOverviewCitations, extractPerplexityCitations } from '@/utils/citationExtractors';
 import { getQueriesByBrand } from './userQueries';
 import { getBrandInfo } from './brandDataService';
 import { retrieveDocumentWithLargeData } from '../storage/cloudStorage';
@@ -207,7 +205,7 @@ export function calculateCumulativeAnalytics(
     const perplexityCitations = queryResult.results?.perplexity ? 
       extractPerplexityCitations(queryResult.results.perplexity.response || '', queryResult.results.perplexity) : [];
 
-    // Analyze brand mentions for this query
+    // Analyze brand mentions for this query (pass empty competitors array since we don't have it in this context)
     const analysis = analyzeBrandMentions(brandName, brandDomain, {
       chatgpt: queryResult.results?.chatgpt ? {
         response: queryResult.results.chatgpt.response || '',
@@ -221,7 +219,7 @@ export function calculateCumulativeAnalytics(
         response: queryResult.results.perplexity.response || '',
         citations: perplexityCitations
       } : undefined
-    });
+    }, []); // Empty competitors array for now
 
     // Accumulate totals
     totalBrandMentions += analysis.totals.totalBrandMentions;

@@ -7,8 +7,7 @@ interface ProtectedRouteProps {
   children: React.ReactNode;
   redirectTo?: string; // Optional custom redirect path
   loadingComponent?: React.ReactNode; // Optional custom loading component
-  requireAdmin?: boolean; // Optional admin requirement
-  adminEmails?: string[]; // Optional list of admin emails
+  requireAdmin?: boolean; // Optional admin requirement (checks userProfile.admin)
 }
 
 // login page is /signin page
@@ -17,10 +16,9 @@ export default function ProtectedRoute({
   children, 
   redirectTo = "/signin",
   loadingComponent,
-  requireAdmin = false,
-  adminEmails = []
+  requireAdmin = false
 }: ProtectedRouteProps): React.ReactElement {
-  const { user, loading } = useAuthContext();
+  const { user, loading, isAdmin } = useAuthContext();
   const router = useRouter();
 
   useEffect(() => {
@@ -52,18 +50,15 @@ export default function ProtectedRoute({
   }
 
   // Check admin requirement if specified
-  if (requireAdmin && adminEmails.length > 0) {
-    const isAdmin = user.email && adminEmails.includes(user.email);
-    if (!isAdmin) {
-      return (
-        <div className="min-h-screen bg-background flex items-center justify-center">
-          <div className="max-w-md p-8 bg-background border border-border rounded-lg text-center">
-            <h2 className="text-xl font-semibold text-foreground mb-2">Access Denied</h2>
-            <p className="text-muted-foreground">You don't have permission to access this page.</p>
-          </div>
+  if (requireAdmin && !isAdmin) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="max-w-md p-8 bg-background border border-border rounded-lg text-center">
+          <h2 className="text-xl font-semibold text-foreground mb-2">Access Denied</h2>
+          <p className="text-muted-foreground">You don't have permission to access this page. Admin role required.</p>
         </div>
-      );
-    }
+      </div>
+    );
   }
 
   // If user is authenticated (and admin if required), render the children

@@ -32,6 +32,52 @@ export async function getUserProfileServer(uid: string): Promise<{ result: UserP
   return { result, error };
 }
 
+// Helper function to check if user is admin based on profile
+export async function isUserAdmin(uid: string): Promise<boolean> {
+  try {
+    const userRef = firestore.collection('users').doc(uid);
+    const userDoc = await userRef.get();
+    
+    if (!userDoc.exists) {
+      return false;
+    }
+    
+    const userData = userDoc.data() as UserProfile;
+    return userData.admin === true;
+  } catch (error) {
+    console.error('Error checking admin status:', error);
+    return false;
+  }
+}
+
+// Set or remove admin role for a user
+export async function setUserAdminRole(uid: string, isAdmin: boolean): Promise<{ result: boolean; error: any }> {
+  let result = false;
+  let error = null;
+
+  try {
+    console.log(`🔧 Setting admin role for user ${uid}: ${isAdmin}`);
+    const userRef = firestore.collection('users').doc(uid);
+    const userDoc = await userRef.get();
+    
+    if (!userDoc.exists) {
+      throw new Error('User profile does not exist');
+    }
+    
+    await userRef.update({
+      admin: isAdmin
+    });
+    
+    result = true;
+    console.log(`✅ Admin role updated successfully for user ${uid}: ${isAdmin}`);
+  } catch (e) {
+    error = e;
+    console.error('❌ Error setting admin role:', e);
+  }
+
+  return { result, error };
+}
+
 // Update user credits using Admin SDK
 export async function updateUserCreditsServer(uid: string, creditsChange: number): Promise<{ result: boolean; error: any }> {
   let result = false;
@@ -86,21 +132,12 @@ export async function updateUserCreditsServer(uid: string, creditsChange: number
 
 // Deduct credits for operations using Admin SDK
 export async function deductCreditsServer(uid: string, amount: number): Promise<{ result: boolean; error: any }> {
-  console.log(`🔄 Deducting ${amount} credits for user ${uid}`);
-  const result = await updateUserCreditsServer(uid, -amount);
   
-  if (result.result) {
-    console.log(`✅ Successfully deducted ${amount} credits from user ${uid}`);
-  } else {
-    console.error(`❌ Failed to deduct ${amount} credits from user ${uid}:`, result.error);
-  }
-  
-  return result;
+  return updateUserCreditsServer(uid, -amount);
 }
 
-// Add credits (for purchases, bonuses, etc.) using Admin SDK
 export async function addCreditsServer(uid: string, amount: number): Promise<{ result: boolean; error: any }> {
-  console.log(`🔄 Adding ${amount} credits for user ${uid}`);
+
   return updateUserCreditsServer(uid, amount);
 }
 
@@ -124,7 +161,8 @@ export async function createUserProfileServer(userData: any, isNewUser: boolean 
         credits: 500, // Give 500 credits to new users
         createdAt: now,
         lastLoginAt: now,
-        isNewUser: true
+        isNewUser: true,
+        admin: false // New users are not admin by default
       };
       
       // Only add photoURL if it exists
@@ -168,23 +206,12 @@ export async function createUserProfileServer(userData: any, isNewUser: boolean 
 
 // Get user's current credit balance using Admin SDK
 export async function getUserCreditsServer(uid: string): Promise<{ result: number; error: any }> {
-  let result = 0;
-  let error = null;
-
-  try {
-    const { result: profile, error: profileError } = await getUserProfileServer(uid);
-    
-    if (profileError || !profile) {
-      error = profileError || new Error('User profile not found');
-      return { result, error };
-    }
-    
-    result = profile.credits || 0;
-    console.log(`💰 Current credits for user ${uid}: ${result}`);
-  } catch (e) {
-    error = e;
-    console.error('❌ Error getting user credits (Admin SDK):', e);
+  
+  const { result: profile, error } = await getUserProfileServer(uid);
+  
+  if (error || !profile) {
+    return { result: 0, error: error || 'User profile not found' };
   }
-
-  return { result, error };
-} 
+  
+  return { result: profile.credits || 0, error: null };
+}

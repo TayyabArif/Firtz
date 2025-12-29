@@ -12,6 +12,7 @@ interface AuthContextType {
   user: User | null;
   userProfile: UserProfile | null;
   loading: boolean;
+  isAdmin: boolean; // Admin status based on userProfile.admin
   refreshUserProfile: () => Promise<void>;
 }
 
@@ -19,6 +20,7 @@ export const AuthContext = createContext<AuthContextType>({
   user: null, 
   userProfile: null, 
   loading: true,
+  isAdmin: false,
   refreshUserProfile: async () => {}
 });
 
@@ -95,10 +97,13 @@ export function AuthContextProvider( { children }: AuthContextProviderProps ): R
     return () => unsubscribe();
   }, [] );
 
+  // Calculate isAdmin based on userProfile
+  const isAdmin = userProfile?.admin === true;
+
   // Prevent hydration mismatch by rendering same content on server and client initially
   if ( !isClient ) {
     return (
-      <AuthContext.Provider value={{ user: null, userProfile: null, loading: true, refreshUserProfile: async () => {} }}>
+      <AuthContext.Provider value={{ user: null, userProfile: null, loading: true, isAdmin: false, refreshUserProfile: async () => {} }}>
         {children}
       </AuthContext.Provider>
     );
@@ -106,7 +111,7 @@ export function AuthContextProvider( { children }: AuthContextProviderProps ): R
 
   // Provide the authentication context to child components
   return (
-    <AuthContext.Provider value={{ user, userProfile, loading, refreshUserProfile }}>
+    <AuthContext.Provider value={{ user, userProfile, loading, isAdmin, refreshUserProfile }}>
       {loading ? <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-foreground">Loading...</div>
       </div> : children}

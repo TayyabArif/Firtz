@@ -14,6 +14,7 @@ export interface UserProfile {
   createdAt: string;
   lastLoginAt: string;
   isNewUser?: boolean;
+  admin?: boolean; // Admin role flag
 }
 
 // Create or update user profile in Firestore
@@ -36,7 +37,8 @@ export async function createUserProfile(user: User, isNewUser: boolean = false):
         credits: 500, // Give 500 credits to new users
         createdAt: now,
         lastLoginAt: now,
-        isNewUser: true
+        isNewUser: true,
+        admin: false // New users are not admin by default
       };
       
       // Only add photoURL if it exists

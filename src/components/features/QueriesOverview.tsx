@@ -15,6 +15,8 @@ import {
   X
 } from 'lucide-react';
 import ProcessQueriesButton from './ProcessQueriesButton';
+import ProcessSingleQueryButton from './ProcessSingleQueryButton';
+import DeleteQueryButton from './DeleteQueryButton';
 import { UserBrand } from '@/firebase/firestore/getUserBrands';
 import { extractChatGPTCitations } from './ChatGPTResponseRenderer';
 import { extractGoogleAIOverviewCitations } from './GoogleAIOverviewRenderer';
@@ -64,6 +66,7 @@ export default function QueriesOverview({
   const [countdown, setCountdown] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
   const [processingQueries, setProcessingQueries] = useState<Set<string>>(new Set()); // Track which queries are being processed
   const [isProcessingActive, setIsProcessingActive] = useState(false); // Track if any processing is happening
+  const [queryJobIds, setQueryJobIds] = useState<Map<string, string>>(new Map()); // Map query text to job ID
   // const processButtonRef = React.useRef<any>(null); // Removed as per edit hint
 
   // Use brand override if provided, otherwise use selected brand
@@ -72,6 +75,81 @@ export default function QueriesOverview({
   // Safely get queries and results (with fallbacks)
   const queries = brand?.queries || [];
   const savedResults = brand?.queryProcessingResults || [];
+  
+  // Check for active background jobs on mount and when brand changes
+  useEffect(() => {
+    if (!brand?.id) {
+      setIsProcessingActive(false);
+      setProcessingQueries(new Set());
+      setQueryJobIds(new Map());
+      return;
+    }
+    
+    const checkJobStatus = () => {
+      const processingSet = new Set<string>();
+      const jobIdsMap = new Map<string, string>();
+      let hasActiveJob = false;
+      
+      // Check for individual query jobs
+      queries.forEach(query => {
+        const storedJobId = localStorage.getItem(`processing_job_${brand.id}_${query.query}`);
+        if (storedJobId) {
+          processingSet.add(query.query);
+          jobIdsMap.set(query.query, storedJobId);
+          hasActiveJob = true;
+        }
+      });
+      
+      // Also check for main brand job (for batch processing)
+      const mainJobId = localStorage.getItem(`processing_job_${brand.id}`);
+      if (mainJobId) {
+        hasActiveJob = true;
+        // If we have a main job but no individual tracking, mark all queries as processing
+        if (processingSet.size === 0) {
+          queries.forEach(q => {
+            processingSet.add(q.query);
+          });
+        }
+      }
+      
+      setIsProcessingActive(hasActiveJob);
+      setProcessingQueries(processingSet);
+      setQueryJobIds(jobIdsMap);
+    };
+    
+    checkJobStatus();
+    
+    // Listen for storage changes (when job completes)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key && e.key.startsWith(`processing_job_${brand.id}`)) {
+        if (!e.newValue) {
+          // Job was cleared (completed)
+          checkJobStatus();
+          refetchBrands(); // Refresh to get latest results
+        } else {
+          // Job was started
+          checkJobStatus();
+        }
+      }
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    
+    // Also poll periodically to check job status (for same-tab updates)
+    const interval = setInterval(checkJobStatus, 3000);
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      clearInterval(interval);
+    };
+  }, [brand?.id, queries, refetchBrands]);
+  
+  // Handler for when a single query job starts
+  const handleQueryJobStarted = (queryText: string, jobId: string) => {
+    setProcessingQueries(prev => new Set([...prev, queryText]));
+    setQueryJobIds(prev => new Map(prev.set(queryText, jobId)));
+    setIsProcessingActive(true);
+  };
   
   // Combine saved results with live processing results (memoized to prevent infinite re-renders)
   const queryResults = useMemo(() => {
@@ -643,7 +721,25 @@ export default function QueriesOverview({
                           </div>
                         </td>
                         <td className="px-4 py-4 text-center">
-                          <div className="flex items-center justify-center">
+                          <div className="flex items-center justify-center space-x-2">
+                            {!hasResults && brand && (
+                              <ProcessSingleQueryButton
+                                query={query}
+                                brandId={brand.id}
+                                brandData={{
+                                  companyName: brand.companyName,
+                                  domain: brand.domain,
+                                  userId: brand.userId,
+                                  competitors: brand.competitors || []
+                                }}
+                                onJobStarted={(jobId) => {
+                                  handleQueryJobStarted(query.query, jobId);
+                                }}
+                                onComplete={() => {
+                                  refetchBrands();
+                                }}
+                              />
+                            )}
                             {showEyeIcons && hasResults && (
                               <button
                                 onClick={(e) => {
@@ -656,7 +752,16 @@ export default function QueriesOverview({
                                 More Details
                               </button>
                             )}
-                            {!hasResults && (
+                            {brand && (
+                              <DeleteQueryButton
+                                query={query}
+                                brandId={brand.id}
+                                onComplete={() => {
+                                  refetchBrands();
+                                }}
+                              />
+                            )}
+                            {!hasResults && !brand && (
                               <span className="text-xs text-muted-foreground">No data</span>
                             )}
                           </div>
@@ -735,9 +840,38 @@ export default function QueriesOverview({
                           More Details
                         </button>
                       )} */}
-                      {!hasResults && (
-                        <span className="text-xs text-muted-foreground">No data</span>
-                      )}
+                      <div className="flex items-center space-x-2">
+                        {!hasResults && brand && (
+                          <ProcessSingleQueryButton
+                            query={query}
+                            brandId={brand.id}
+                            brandData={{
+                              companyName: brand.companyName,
+                              domain: brand.domain,
+                              userId: brand.userId,
+                              competitors: brand.competitors || []
+                            }}
+                            onJobStarted={(jobId) => {
+                              handleQueryJobStarted(query.query, jobId);
+                            }}
+                            onComplete={() => {
+                              refetchBrands();
+                            }}
+                          />
+                        )}
+                        {brand && (
+                          <DeleteQueryButton
+                            query={query}
+                            brandId={brand.id}
+                            onComplete={() => {
+                              refetchBrands();
+                            }}
+                          />
+                        )}
+                        {!hasResults && !brand && (
+                          <span className="text-xs text-muted-foreground">No data</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );

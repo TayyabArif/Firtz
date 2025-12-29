@@ -4,13 +4,8 @@ import { useAuthContext } from '@/context/AuthContext';
 import { useBrandContext } from '@/context/BrandContext';
 import { useToast } from '@/context/ToastContext';
 import { RefreshCw, Zap, AlertCircle, CheckCircle, RotateCcw, StopCircle, CreditCard } from 'lucide-react';
-import { updateBrandWithQueryResults } from '@/firebase/firestore/getUserBrands';
-import { saveDetailedQueryResults } from '@/firebase/firestore/detailedQueryResults';
-import { calculateCumulativeAnalytics, saveBrandAnalytics, calculateLifetimeBrandAnalytics, saveLifetimeAnalytics } from '@/firebase/firestore/brandAnalytics';
-import { calculateCumulativeCompetitorAnalytics } from '@/utils/competitor-analytics';
-import { saveCompetitorAnalytics } from '@/firebase/firestore/competitorAnalytics';
-import { Competitor } from '@/lib/competitor-matching';
 import { getFirebaseIdTokenWithRetry } from '@/utils/getFirebaseToken';
+import { useProcessingJob } from '@/hooks/useProcessingJob';
 
 interface ProcessQueriesButtonProps {
   brandId?: string;
@@ -41,10 +36,40 @@ export default function ProcessQueriesButton({
   const [processing, setProcessing] = useState(false);
   const [status, setStatus] = useState<'idle' | 'processing' | 'success' | 'error' | 'cancelled'>('idle');
   const [message, setMessage] = useState('');
-  const [processedResults, setProcessedResults] = useState<any[]>([]);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   
-  // Add ref to track cancellation
-  const cancelledRef = useRef(false);
+  // Get target brand ID for localStorage key
+  const targetBrandId = brandId || selectedBrand?.id;
+  
+  // Restore job ID from localStorage on mount (simple approach)
+  useEffect(() => {
+    if (!targetBrandId) return;
+    
+    const storedJobId = localStorage.getItem(`processing_job_${targetBrandId}`);
+    if (storedJobId) {
+      setCurrentJobId(storedJobId);
+      setProcessing(true);
+      setStatus('processing');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetBrandId]); // Only run when targetBrandId changes (component mount or brand change)
+  
+  // Use processing job hook for background jobs (this will poll and update status)
+  const { job, isComplete, isFailed, isProcessing: jobProcessing } = useProcessingJob(currentJobId);
+  
+  // Add ref to track if completion toasts have been shown for current processing session
+  const completionToastsShownRef = useRef(false);
+  
+  // Store job ID in localStorage when it changes
+  useEffect(() => {
+    if (targetBrandId) {
+      if (currentJobId) {
+        localStorage.setItem(`processing_job_${targetBrandId}`, currentJobId);
+      } else {
+        localStorage.removeItem(`processing_job_${targetBrandId}`);
+      }
+    }
+  }, [currentJobId, targetBrandId]);
 
   // Auto-trigger processing if autoStart becomes true
   const [autoStarted, setAutoStarted] = useState(false);
@@ -57,6 +82,66 @@ export default function ProcessQueriesButton({
     }
   }, [autoStart, autoStarted, processing]);
 
+  // Monitor job status
+  useEffect(() => {
+    if (!job) return;
+
+    if (job.status === 'processing' || job.status === 'pending') {
+      setProcessing(true);
+      setStatus('processing');
+      setMessage(`Processing ${job.processedQueries} of ${job.totalQueries} queries in background...`);
+    } else if (job.status === 'completed') {
+      setProcessing(false);
+      setStatus('success');
+      setMessage(`Successfully processed ${job.processedQueries} queries! (${job.creditsUsed} credits used)`);
+      
+      // Clear job ID and localStorage immediately for completed jobs
+      if (targetBrandId) {
+        localStorage.removeItem(`processing_job_${targetBrandId}`);
+      }
+      setCurrentJobId(null);
+      
+      if (!completionToastsShownRef.current) {
+        completionToastsShownRef.current = true;
+        showSuccess('🎉 Queries Processed!', `Successfully processed ${job.processedQueries} queries in the background.`);
+        
+        // Refresh brands and user profile only once when job completes
+        refetchBrands();
+        refreshUserProfile();
+        
+        if (onComplete) {
+          onComplete({
+            success: true,
+            cancelled: false,
+            queryResults: [],
+            summary: {
+              totalQueries: job.totalQueries,
+              processedQueries: job.processedQueries,
+              totalErrors: 0,
+              creditsUsed: job.creditsUsed
+            }
+          });
+        }
+      }
+      
+      // Reset status after 3 seconds
+      setTimeout(() => {
+        setStatus('idle');
+        setMessage('');
+        completionToastsShownRef.current = false;
+      }, 3000);
+    } else if (job.status === 'failed') {
+      setProcessing(false);
+      setStatus('error');
+      setMessage(`Processing failed: ${job.error || 'Unknown error'}`);
+      showError('Processing Failed', job.error || 'An error occurred while processing queries.');
+      if (targetBrandId) {
+        localStorage.removeItem(`processing_job_${targetBrandId}`);
+      }
+      setCurrentJobId(null);
+    }
+  }, [job, showSuccess, showError, refetchBrands, refreshUserProfile, onComplete, targetBrandId]);
+
   const handleProcessQueries = async () => {
     if (!user?.uid) {
       setStatus('error');
@@ -65,7 +150,6 @@ export default function ProcessQueriesButton({
     }
 
     // Check user credits (10 credits per query) - Skip if autoStart is true
-    const targetBrandId = brandId || selectedBrand?.id;
     const targetBrand = brands.find(b => b.id === targetBrandId);
     
     if (!targetBrand) {
@@ -103,11 +187,7 @@ export default function ProcessQueriesButton({
       }
     }
 
-    setProcessing(true);
-    setStatus('processing');
-    setMessage(`Processing ${queries.length} queries for ${brandName}...${!autoStart ? ` (${queries.length * 10} credits)` : ''}`);
-    setProcessedResults([]); // Reset processed results
-    cancelledRef.current = false;
+    completionToastsShownRef.current = false; // Reset completion toasts tracking
 
     // Notify parent that processing has started
     if (onStart) {
@@ -122,418 +202,66 @@ export default function ProcessQueriesButton({
         throw new Error('Failed to get authentication token. Please sign in again.');
       }
 
-      // Generate unique processing session identifier
-      const processingSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const processingSessionTimestamp = new Date().toISOString();
+      // Call background processing API
+      const response = await fetch(`${window.location.origin}/api/process-queries-background`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          brandId: targetBrandId,
+          brandData: {
+            companyName: targetBrand.companyName,
+            domain: targetBrand.domain,
+            userId: targetBrand.userId,
+            competitors: targetBrand.competitors || []
+          },
+          queries: queries.map(q => ({
+            query: q.query,
+            keyword: q.keyword,
+            category: q.category
+          }))
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to start background processing');
+      }
+
+      const data = await response.json();
       
-      // Process queries one by one and save incrementally
-      const allResults: any[] = [];
-      let processedCount = 0;
-
-      for (const query of queries) {
-        // Check if cancelled
-        if (cancelledRef.current) {
-          break;
-        }
-
-        try {
-          // Notify parent that this specific query is starting
-          if (onQueryStart) {
-            onQueryStart(query.query);
-          }
-
-          setMessage(`Processing query ${processedCount + 1} of ${queries.length} for ${brandName}... (10 credits per query)`);
-          
-          // Process individual query with authentication
-          
-          let response;
-          try {
-            response = await fetch(`${window.location.origin}/api/user-query`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${idToken}`, // Add Firebase ID token
-              },
-              body: JSON.stringify({
-                query: query.query,
-                context: `This query is related to ${targetBrand.companyName} in the ${query.category} category. Topic: ${query.keyword}.`,
-                isAutoStart: autoStart // Add isAutoStart flag
-              }),
-            });
-          } catch (fetchError) {
-            console.error('❌ Fetch error:', fetchError);
-            throw new Error(`Network error: ${fetchError instanceof Error ? fetchError.message : 'Unknown fetch error'}`);
-          }
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            console.error('❌ API error response:', errorText);
-            
-            // Parse error response if possible
-            try {
-              const errorData = JSON.parse(errorText);
-              if (errorData.code === 'INSUFFICIENT_CREDITS') {
-                // Show detailed credit error notification
-                showError(
-                  'Insufficient Credits',
-                  `You need ${errorData.requiredCredits} credits but only have ${errorData.availableCredits} available.`,
-                );
-                throw new Error(`Insufficient credits: Need ${errorData.requiredCredits}, have ${errorData.availableCredits}`);
-              } else if (errorData.code === 'AUTHENTICATION_REQUIRED') {
-                showError(
-                  'Authentication Failed',
-                  'Please sign in again to continue processing queries.',
-                );
-                throw new Error('Authentication failed. Please sign in again.');
-              } else {
-                showError(
-                  'Query Processing Failed',
-                  errorData.error || 'An unexpected error occurred while processing your query.',
-                );
-                throw new Error(errorData.error || `Failed to process query (${response.status})`);
-              }
-            } catch (parseError) {
-              showError(
-                'Network Error',
-                'Failed to communicate with the server. Please check your connection and try again.',
-              );
-              throw new Error(`Failed to process query (${response.status}): ${query.query.substring(0, 30)}...`);
-            }
-          }
-
-          const queryData = await response.json();
-          
-          // Refresh user profile to update credits in sidebar
-          if (queryData.userCredits) {
-            await refreshUserProfile();
-          }
-          
-          // Format the result with processing session information
-          const queryResult: any = {
-            date: new Date().toISOString(),
-            processingSessionId,
-            processingSessionTimestamp,
-            query: query.query,
-            keyword: query.keyword,
-            category: query.category,
-            results: {}
-          };
-
-          // Process the enhanced results from the new API
-          if (queryData.success && queryData.results && Array.isArray(queryData.results)) {
-            queryData.results.forEach((result: any) => {
-              if (result.providerId === 'azure-openai-search') {
-                queryResult.results.chatgpt = {
-                  response: result.data?.content || '',
-                  ...(result.error && { error: result.error }),
-                  timestamp: result.timestamp || new Date().toISOString(),
-                  responseTime: result.responseTime,
-                  webSearchUsed: result.data?.webSearchUsed || false,
-                  citations: result.data?.annotations?.length || 0
-                };
-              } else if (result.providerId === 'google-ai-overview') {
-                queryResult.results.googleAI = {
-                  response: `Found ${result.data?.totalItems || 0} search results`,
-                  ...(result.error && { error: result.error }),
-                  timestamp: result.timestamp || new Date().toISOString(),
-                  responseTime: result.responseTime,
-                  totalItems: result.data?.totalItems || 0,
-                  organicResults: result.data?.organicResultsCount || 0,
-                  peopleAlsoAsk: result.data?.peopleAlsoAskCount || 0,
-                  location: result.data?.location || 'Unknown',
-                  // Include AI Overview content if available
-                  aiOverview: result.data?.aiOverview || null,
-                  aiOverviewReferencesCount: result.data?.aiOverviewReferences?.length || 0,
-                  hasAIOverview: result.data?.hasAIOverview || false,
-                  serpFeaturesCount: result.data?.serpFeatures?.length || 0,
-                  // Include other SERP data counts instead of arrays
-                  relatedSearchesCount: result.data?.relatedSearches?.length || 0,
-                  videoResultsCount: result.data?.videoResults?.length || 0,
-                  // Remove rawDataForSEOResponse to reduce document size
-                  hasRawData: !!(result.data?.rawDataForSEOResponse)
-                };
-              } else if (result.providerId === 'perplexity') {
-                queryResult.results.perplexity = {
-                  response: result.data?.content || '',
-                  ...(result.error && { error: result.error }),
-                  timestamp: result.timestamp || new Date().toISOString(),
-                  responseTime: result.responseTime,
-                  citations: result.data?.citations?.length || 0,
-                  realTimeData: result.data?.realTimeData || false,
-                  // Store flattened citation data to avoid nested arrays but preserve citation info
-                  citationsData: result.data?.citations ? result.data.citations.join('|||') : '',
-                  searchResultsData: result.data?.searchResults ? 
-                    result.data.searchResults.map((r: any) => `${r.title || ''}|||${r.url || ''}`).join('###') : '',
-                  structuredCitationsData: result.data?.structuredCitations ? 
-                    result.data.structuredCitations.join('|||') : '',
-                  // Store counts for display
-                  citationsCount: result.data?.citations?.length || 0,
-                  searchResultsCount: result.data?.searchResults?.length || 0,
-                  structuredCitationsCount: result.data?.structuredCitations?.length || 0,
-                  // Store metadata as simple key-value pairs (avoid nested objects/arrays)
-                  hasMetadata: !!(result.data?.metadata),
-                  hasUsageStats: !!(result.data?.usage)
-                };
-              }
-            });
-          }
-
-          // Add credit information to the result
-          if (queryData.userCredits) {
-            queryResult.creditInfo = {
-              creditsDeducted: queryData.userCredits.deducted || 10,
-              creditsAfter: queryData.userCredits.after,
-              totalCost: queryData.totalCost
-            };
-          }
-
-          allResults.push(queryResult);
-          processedCount++;
-
-          // Update local state immediately to show progress
-          setProcessedResults([...allResults]);
-          
-          // Notify parent component about progress
-          if (onProgress) {
-            onProgress([...allResults]);
-          }
-
-          // Save individual result immediately
-          setMessage(`Saving result ${processedCount} of ${queries.length} for ${brandName}...`);
-          
-          // Save detailed results to separate collection first
-          const { success: detailedSaveSuccess, error: detailedSaveError } = await saveDetailedQueryResults(
-            targetBrandId!,
-            targetBrand.userId,
-            targetBrand.companyName,
-            [queryResult] // Save just the current result to detailed collection
-          );
-          
-          if (!detailedSaveSuccess) {
-            console.error('❌ Error saving detailed result:', detailedSaveError);
-            // Continue anyway, as the main brand document save is more important
-          }
-          
-          const { error: updateError } = await updateBrandWithQueryResults(
-            targetBrandId!,
-            allResults // Save all results so far
-          );
-
-          if (updateError) {
-            console.error('Error saving individual result:', updateError);
-          }
-
-          // Calculate and save incremental analytics after each query
-          try {
-            setMessage(`Updating analytics for ${brandName}...`);
-            
-            const analyticsData = calculateCumulativeAnalytics(
-              targetBrand.userId,
-              targetBrandId!,
-              targetBrand.companyName,
-              targetBrand.domain,
-              processingSessionId,
-              processingSessionTimestamp,
-              allResults // Use all results processed so far
-            );
-            
-            const { success: analyticsSaveSuccess, error: analyticsSaveError } = await saveBrandAnalytics(analyticsData);
-            
-            if (!analyticsSaveSuccess) {
-              console.error('❌ Error saving incremental analytics:', analyticsSaveError);
-            }
-          } catch (analyticsError) {
-            console.error('❌ Error calculating/saving incremental analytics:', analyticsError);
-            // Don't fail the entire process for analytics errors
-          }
-
-          // Calculate and save competitor analytics after each query
-          try {
-            setMessage(`Updating competitor analytics for ${brandName}...`);
-            
-            // Convert brand competitors to Competitor format
-            const competitors: Competitor[] = (targetBrand.competitors || []).map(comp => ({
-              name: comp,
-              domain: undefined, // Will be enhanced later to include competitor domains
-              aliases: undefined
-            }));
-            
-            if (competitors.length > 0) {
-              const competitorAnalyticsData = calculateCumulativeCompetitorAnalytics(
-                targetBrand.userId,
-                targetBrandId!,
-                targetBrand.companyName,
-                targetBrand.domain,
-                processingSessionId,
-                processingSessionTimestamp,
-                competitors,
-                allResults // Use all results processed so far
-              );
-              
-              const { result: competitorSaveResult, error: competitorSaveError } = await saveCompetitorAnalytics(competitorAnalyticsData);
-              
-              if (!competitorSaveResult?.success) {
-                console.error('❌ Error saving incremental competitor analytics:', competitorSaveError);
-              }
-            }
-          } catch (competitorAnalyticsError) {
-            console.error('❌ Error calculating/saving competitor analytics:', competitorAnalyticsError);
-            // Don't fail the entire process for competitor analytics errors
-          }
-
-          // Small delay between queries
-          await new Promise(resolve => setTimeout(resolve, 1000));
-
-        } catch (queryError) {
-          console.error(`Error processing query: ${query.query}`, queryError);
-          
-          // If it's a credit or auth error, stop processing
-          if (queryError instanceof Error && 
-              (queryError.message.includes('Insufficient credits') || 
-               queryError.message.includes('Authentication failed'))) {
-            setStatus('error');
-            setMessage(queryError.message);
-            return;
-          }
-          
-          processedCount++;
-        }
-      }
-
-      // Check if cancelled
-      if (cancelledRef.current) {
-        setStatus('cancelled');
-        setMessage(`Processing cancelled. Processed ${processedCount} of ${queries.length} queries.`);
-        showWarning(
-          '⏸️ Processing Cancelled',
-          `Processed ${processedCount} of ${queries.length} queries before cancellation. You can resume processing the remaining queries anytime.`
-        );
-      } else {
-        setStatus('success');
-        setMessage(`Successfully processed ${processedCount} queries for ${brandName}! (${processedCount * 10} credits used)`);
-        // Calculate next processing date (7 days from now)
-        const nextProcessingDate = new Date();
-        nextProcessingDate.setDate(nextProcessingDate.getDate() + 7);
-        const nextProcessingFormatted = nextProcessingDate.toLocaleDateString('en-US', {
-          weekday: 'long',
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric'
-        });
-        
-        showSuccess(
-          '🎉 All Queries Processed!',
-          `Successfully processed ${processedCount} queries for ${brandName}. Used ${processedCount * 10} credits.`
-        );
-        
-        // Show scheduling information after a brief delay
-        setTimeout(() => {
-          showInfo(
-            '📅 Next Processing Scheduled',
-            `Your next automatic processing is scheduled for ${nextProcessingFormatted}. You can also process queries manually anytime.`
-          );
-        }, 3000);
-      }
-
-      // Analytics are now calculated and saved incrementally after each query
-      // No need for final analytics calculation since it's done per query
-
-      // Calculate and save lifetime analytics after completing all queries to ensure citations table gets updated
-      // Run this even if cancelled, as long as some queries were processed
-      if (processedCount > 0) {
-        try {
-          setMessage(`Updating lifetime analytics for ${brandName}...`);
-          
-          const { result: lifetimeAnalytics, error: lifetimeError } = await calculateLifetimeBrandAnalytics(targetBrandId!);
-          
-          if (lifetimeError) {
-            console.error('❌ Error calculating lifetime analytics:', lifetimeError);
-          } else if (lifetimeAnalytics) {
-            const { success: lifetimeSaveSuccess, error: lifetimeSaveError } = await saveLifetimeAnalytics(lifetimeAnalytics);
-            
-            if (!lifetimeSaveSuccess) {
-              console.error('❌ Error saving lifetime analytics:', lifetimeSaveError);
-            }
-          }
-        } catch (lifetimeError) {
-          console.error('❌ Error in lifetime analytics processing:', lifetimeError);
-          // Don't fail the entire process for lifetime analytics errors
-        }
-      }
-
-      // Call the onComplete callback if provided
-      if (onComplete) {
-        onComplete({
-          success: !cancelledRef.current,
-          cancelled: cancelledRef.current,
-          queryResults: allResults,
-          summary: {
-            totalQueries: queries.length,
-            processedQueries: processedCount,
-            totalErrors: queries.length - processedCount,
-            creditsUsed: processedCount * 10
-          }
-        });
-      }
-
-      // Force a complete refresh of brand data to ensure all components update
-      try {
-        await refetchBrands();
-      } catch (refreshError) {
-        console.error('❌ Error during final brand data refresh:', refreshError);
-      }
-
-      // Reset status after 5 seconds
-      setTimeout(() => {
-        setStatus('idle');
-        setMessage('');
-      }, 5000);
+      // Store job ID to track progress
+      setCurrentJobId(data.jobId);
+      setProcessing(true);
+      setStatus('processing');
+      setMessage(`Started processing ${queries.length} queries in background...`);
+      
+      // Refresh user profile to show updated credits
+      await refreshUserProfile();
+      
+      showInfo(
+        '✅ Processing Started',
+        `Your queries are now processing in the background. You can safely close this page and come back later.`
+      );
 
     } catch (error) {
+      setProcessing(false);
       setStatus('error');
-      const errorMessage = error instanceof Error ? error.message : 'Failed to process queries';
+      const errorMessage = error instanceof Error ? error.message : 'Failed to start processing';
       setMessage(errorMessage);
       console.error('Process queries error:', error);
       
-      // Show error notification
       showError(
         '❌ Processing Failed',
-        'An unexpected error occurred while processing queries. Please check your connection and try again.',
+        errorMessage
       );
-      
-      // Reset status after 5 seconds
-      setTimeout(() => {
-        setStatus('idle');
-        setMessage('');
-      }, 5000);
-    } finally {
-      setProcessing(false);
-      cancelledRef.current = false; // Reset cancellation flag
-      
-      // Refresh user profile to show updated credits
-      try {
-        await refreshUserProfile();
-      } catch (refreshError) {
-        console.error('❌ Error refreshing user profile:', refreshError);
-      }
-      
-      // Do a final refresh to get the latest data
-      try {
-        await refetchBrands();
-      } catch (error) {
-        console.error('Error doing final refresh:', error);
-      }
     }
-  };
-
-  const handleStopProcessing = () => {
-    cancelledRef.current = true;
-    setMessage('Stopping processing...');
   };
 
   // Check if queries have been processed
   const getProcessedQueriesCount = () => {
-    const targetBrandId = brandId || selectedBrand?.id;
     const targetBrand = brands.find(b => b.id === targetBrandId);
     return targetBrand?.queryProcessingResults?.length || 0;
   };
@@ -542,7 +270,6 @@ export default function ProcessQueriesButton({
 
   // Calculate required credits
   const getRequiredCredits = () => {
-    const targetBrandId = brandId || selectedBrand?.id;
     const targetBrand = brands.find(b => b.id === targetBrandId);
     const queryCount = targetBrand?.queries?.length || 0;
     return queryCount * 10;
@@ -594,7 +321,6 @@ export default function ProcessQueriesButton({
     processing: 'opacity-80 cursor-not-allowed',
     success: 'bg-green-600 hover:bg-green-700 text-white',
     error: 'bg-red-600 hover:bg-red-700 text-white',
-    cancelled: 'bg-yellow-600 hover:bg-yellow-700 text-white'
   };
 
   // Icon based on status and processed state
@@ -664,27 +390,11 @@ export default function ProcessQueriesButton({
           <span>{getButtonText()}</span>
         </button>
         
-        {/* Stop button - only visible during processing */}
-        {processing && !cancelledRef.current && (
-          <button
-            onClick={handleStopProcessing}
-            className={`
-              ${baseStyles}
-              bg-red-600 text-white hover:bg-red-700 focus:ring-red-600
-              ${sizeStyles[size]}
-              animate-fade-in
-            `}
-            title="Stop processing queries"
-          >
-            <StopCircle className={`${size === 'sm' ? 'h-3.5 w-3.5' : size === 'lg' ? 'h-5 w-5' : 'h-4 w-4'}`} />
-            <span>Stop</span>
-          </button>
-        )}
       </div>
       
-      {processing && (
-        <p className="text-xs text-green-600 mt-1 font-medium text-center">
-          ⚠️ Don't Refresh or Leave Page while Queries are Processing
+      {processing && job && (
+        <p className="text-xs text-blue-600 mt-1 font-medium text-center">
+          ✓ Processing in background... ({job.processedQueries}/{job.totalQueries} queries completed). You can safely close this page.
         </p>
       )}
       

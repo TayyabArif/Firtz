@@ -20,7 +20,8 @@ import {
   Moon,
   Monitor,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Shield
 } from 'lucide-react';
 import { useTheme } from '@/context/ThemeContext';
 import { useBrandContext } from '@/context/BrandContext';
@@ -47,7 +48,7 @@ export default function Sidebar({ isOpen, onToggle }: SidebarProps): React.React
   const pathname = usePathname();
   const router = useRouter();
   const { theme, setTheme, actualTheme } = useTheme();
-  const { user, userProfile, refreshUserProfile } = useAuthContext();
+  const { user, userProfile, refreshUserProfile, isAdmin } = useAuthContext();
   const { 
     brands, 
     loading: brandsLoading, 
@@ -132,7 +133,12 @@ export default function Sidebar({ isOpen, onToggle }: SidebarProps): React.React
 
   // Filter out nav items to hide
   const hiddenNavNames = ['Analytics', 'Billing', 'Settings'];
-  const visibleNavigationItems = navigationItems.filter(item => !hiddenNavNames.includes(item.name));
+  const filteredItems = navigationItems.filter(item => !hiddenNavNames.includes(item.name));
+  
+  // Add Admin link if user is admin and not already in admin section
+  const visibleNavigationItems = isAdmin && !pathname.startsWith('/dashboard/admin')
+    ? [...filteredItems, { name: 'Admin', href: '/dashboard/admin/users', icon: Shield }]
+    : filteredItems;
 
   return (
     <>
@@ -165,7 +171,7 @@ export default function Sidebar({ isOpen, onToggle }: SidebarProps): React.React
               {/* Light theme logo only - TODO: Restore theme-aware logos when implementing theme switching */}
               <div className="relative">
                 <Image
-                  src="/getcito-logo-dark.webp"
+                  src="/fitst-logo.svg"
                   alt="AI Monitor Logo"
                   width={160}
                   height={36}
@@ -175,7 +181,7 @@ export default function Sidebar({ isOpen, onToggle }: SidebarProps): React.React
                 />
                 {/* TODO: Restore dark theme logo when implementing theme switching
                 <Image
-                  src="/AI-Monitor-Logo-V3-long-dark-themel.png"
+                  src="/fitst-logo.svg"
                   alt="AI Monitor Logo"
                   width={160}
                   height={36}

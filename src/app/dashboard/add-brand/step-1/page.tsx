@@ -138,7 +138,7 @@ export default function AddBrandStep1(): React.ReactElement {
           {/* AI Monitor Logo */}
           <div className="relative w-48 h-12">
             <Image
-              src="/getcito-logo-dark.webp"
+              src="/fitst-logo.svg"
               alt="AI Monitor Logo"
               width={192}
               height={48}
@@ -146,7 +146,7 @@ export default function AddBrandStep1(): React.ReactElement {
               priority
             />
             <Image
-              src="/AI-Monitor-Logo-V3-long-dark-themel.png"
+              src="/fitst-logo.svg"
               alt="AI Monitor Logo"
               width={192}
               height={48}
